@@ -58,8 +58,8 @@ image = (
         "curl",
     )
     .run_commands(
-        "python -m pip install --upgrade pip setuptools wheel",
-        "pip install torch==2.4.0 torchvision==0.19.0 --index-url https://download.pytorch.org/whl/cu124",
+        "python -m pip install --upgrade pip setuptools wheel packaging ninja",
+        "pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124",
     )
     .pip_install(
         "gradio==5.49.1",
@@ -89,6 +89,12 @@ image = (
         "hf_transfer",
         "huggingface_hub[hf_transfer]",
         "gsplat @ https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3+pt24cu124-cp310-cp310-linux_x86_64.whl",
+    )
+    .pip_install(
+        # Upstream imports flash_attn at module import time. Use a prebuilt wheel
+        # matching Python 3.10 + Torch 2.4 + CUDA 12 + PyTorch's default cxx11 ABI
+        # because Modal's slim image does not include CUDA_HOME/nvcc for source builds.
+        "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl",
     )
     .env(
         {

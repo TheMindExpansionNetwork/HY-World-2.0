@@ -1,6 +1,6 @@
 # Jimsky HY-World 2.0 Modal Reconstruction Lane
 
-Status: scaffolded, not GPU-smoke-tested yet. Do not run Modal GPU jobs until the user explicitly says it is time.
+Status: Modal GPU smoke-tested successfully on 2026-04-27 with a tiny synthetic five-frame capture. The batch result produced `gaussians.ply`, `points.ply`, depth/normal maps, camera JSON, timing JSON, and `rendered/rendered_rgb.mp4`. Continue to require explicit user approval for new cost-bearing GPU runs.
 
 ## What this gives Jimsky
 
@@ -68,9 +68,10 @@ The image follows upstream install expectations:
 - PyTorch 2.4.0 / torchvision 0.19.0, CUDA 12.4 wheel
 - `gsplat` pt24/cu124 wheel
 - `ffmpeg`, OpenCV libs, Open3D, pycolmap, Gradio dependencies
+- FlashAttention-2 from a prebuilt Python 3.10 / Torch 2.4 / CUDA 12 wheel, because upstream imports `flash_attn` during pipeline startup
 - Hugging Face cache mounted in a Modal Volume
 
-FlashAttention is intentionally omitted from the first scaffold because building it can be slow/brittle. Add FlashAttention only after the baseline reconstructs successfully.
+The first live smoke test showed FlashAttention is required at import time. Avoid source-building `flash-attn` in Modal's slim image unless a CUDA-devel base is used; the prebuilt wheel path is faster and avoids `CUDA_HOME`/nvcc failures.
 
 ## Run command when approved
 
