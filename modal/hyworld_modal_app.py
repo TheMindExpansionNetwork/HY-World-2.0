@@ -155,6 +155,15 @@ def reconstruct_archive(
     save_rendered: bool = True,
     render_depth: bool = False,
     render_interp_per_pair: int = 12,
+    save_colmap: bool = False,
+    save_conf: bool = False,
+    apply_confidence_mask: bool = False,
+    confidence_percentile: float = 10.0,
+    no_compress_pts: bool = False,
+    compress_pts_max_points: int = 2_000_000,
+    compress_pts_voxel_size: float = 0.002,
+    compress_gs_max_points: int = 5_000_000,
+    max_resolution: int = 1920,
 ) -> bytes:
     """Run HY-World reconstruction on a zip/images/video payload and return a ZIP."""
     work = Path(tempfile.mkdtemp(prefix="hyworld_job_", dir="/tmp"))
@@ -187,6 +196,22 @@ def reconstruct_archive(
         cmd += ["--save_rendered", "--render_interp_per_pair", str(render_interp_per_pair)]
     if render_depth:
         cmd += ["--render_depth"]
+    if save_colmap:
+        cmd += ["--save_colmap"]
+    if save_conf:
+        cmd += ["--save_conf"]
+    if apply_confidence_mask:
+        cmd += ["--apply_confidence_mask", "--confidence_percentile", str(confidence_percentile)]
+    if no_compress_pts:
+        cmd += ["--no_compress_pts"]
+    else:
+        cmd += [
+            "--compress_pts_max_points",
+            str(compress_pts_max_points),
+            "--compress_pts_voxel_size",
+            str(compress_pts_voxel_size),
+        ]
+    cmd += ["--compress_gs_max_points", str(compress_gs_max_points), "--max_resolution", str(max_resolution)]
 
     _run(cmd, cwd=REMOTE_REPO)
 
@@ -214,6 +239,16 @@ def reconstruct_local(
     video_max_frames: int = 32,
     render_interp_per_pair: int = 12,
     gpu: str = "A100-80GB",
+    render_depth: bool = False,
+    save_colmap: bool = False,
+    save_conf: bool = False,
+    apply_confidence_mask: bool = False,
+    confidence_percentile: float = 10.0,
+    no_compress_pts: bool = False,
+    compress_pts_max_points: int = 2_000_000,
+    compress_pts_voxel_size: float = 0.002,
+    compress_gs_max_points: int = 5_000_000,
+    max_resolution: int = 1920,
 ):
     """Upload a local file/folder/zip to Modal and save returned ZIP locally.
 
@@ -245,7 +280,17 @@ def reconstruct_local(
             fps=fps,
             video_min_frames=video_min_frames,
             video_max_frames=video_max_frames,
+            render_depth=render_depth,
             render_interp_per_pair=render_interp_per_pair,
+            save_colmap=save_colmap,
+            save_conf=save_conf,
+            apply_confidence_mask=apply_confidence_mask,
+            confidence_percentile=confidence_percentile,
+            no_compress_pts=no_compress_pts,
+            compress_pts_max_points=compress_pts_max_points,
+            compress_pts_voxel_size=compress_pts_voxel_size,
+            compress_gs_max_points=compress_gs_max_points,
+            max_resolution=max_resolution,
         )
     finally:
         if temp_zip and temp_zip.exists():
