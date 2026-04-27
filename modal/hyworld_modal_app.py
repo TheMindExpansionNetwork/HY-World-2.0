@@ -212,6 +212,7 @@ def reconstruct_local(
     fps: int = 1,
     video_min_frames: int = 4,
     video_max_frames: int = 32,
+    render_interp_per_pair: int = 12,
     gpu: str = "A100-80GB",
 ):
     """Upload a local file/folder/zip to Modal and save returned ZIP locally.
@@ -244,6 +245,7 @@ def reconstruct_local(
             fps=fps,
             video_min_frames=video_min_frames,
             video_max_frames=video_max_frames,
+            render_interp_per_pair=render_interp_per_pair,
         )
     finally:
         if temp_zip and temp_zip.exists():
