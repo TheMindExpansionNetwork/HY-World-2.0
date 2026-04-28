@@ -164,6 +164,7 @@ def reconstruct_archive(
     compress_pts_voxel_size: float = 0.002,
     compress_gs_max_points: int = 5_000_000,
     max_resolution: int = 1920,
+    prior_cam_relpath: str | None = None,
 ) -> bytes:
     """Run HY-World reconstruction on a zip/images/video payload and return a ZIP."""
     work = Path(tempfile.mkdtemp(prefix="hyworld_job_", dir="/tmp"))
@@ -192,6 +193,12 @@ def reconstruct_archive(
         str(video_max_frames),
         "--no_interactive",
     ]
+    if prior_cam_relpath:
+        prior_path = (input_path / prior_cam_relpath) if input_path.is_dir() else (input_root / prior_cam_relpath)
+        if prior_path.exists():
+            cmd += ["--prior_cam_path", str(prior_path)]
+        else:
+            print(f"[Modal] Warning: requested prior_cam_relpath not found: {prior_path}")
     if save_rendered:
         cmd += ["--save_rendered", "--render_interp_per_pair", str(render_interp_per_pair)]
     if render_depth:
@@ -249,6 +256,7 @@ def reconstruct_local(
     compress_pts_voxel_size: float = 0.002,
     compress_gs_max_points: int = 5_000_000,
     max_resolution: int = 1920,
+    prior_cam_path: str | None = None,
 ):
     """Upload a local file/folder/zip to Modal and save returned ZIP locally.
 
@@ -260,7 +268,16 @@ def reconstruct_local(
         raise FileNotFoundError(src)
 
     temp_zip = None
+    prior_cam_relpath = None
+    prior_src = Path(prior_cam_path).expanduser().resolve() if prior_cam_path else None
+    if prior_src and not prior_src.exists():
+        raise FileNotFoundError(prior_src)
     if src.is_dir():
+        if prior_src:
+            try:
+                prior_cam_relpath = str(prior_src.relative_to(src))
+            except ValueError:
+                raise ValueError("prior_cam_path must be inside input_path directory when uploading a folder")
         temp_zip = Path(tempfile.mktemp(suffix=".zip"))
         with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             for path in sorted(src.rglob("*")):
@@ -269,6 +286,8 @@ def reconstruct_local(
         upload_path = temp_zip
         filename = src.name + ".zip"
     else:
+        if prior_src:
+            raise ValueError("prior_cam_path is currently supported only when input_path is a directory containing the prior JSON")
         upload_path = src
         filename = src.name
 
@@ -291,6 +310,7 @@ def reconstruct_local(
             compress_pts_voxel_size=compress_pts_voxel_size,
             compress_gs_max_points=compress_gs_max_points,
             max_resolution=max_resolution,
+            prior_cam_relpath=prior_cam_relpath,
         )
     finally:
         if temp_zip and temp_zip.exists():
