@@ -81,6 +81,45 @@ def preflight_worldgen_archive(scene_zip: bytes) -> dict:
     }
 
 
+def _planned_worldgen_commands(scene_root: Path, out: Path, llm_addr: str, llm_port: int, llm_name: str, nproc: int = 4) -> list[list[str]]:
+    return [
+        ["python", "hyworld2/worldgen/traj_generate.py", "--target_path", str(scene_root), "--llm_addr", llm_addr, "--llm_port", str(llm_port), "--llm_name", llm_name, "--apply_nav_traj", "--apply_up_route", "--apply_recon_iteration", "--force_vlm"],
+        ["torchrun", "--nproc_per_node", str(nproc), "hyworld2/worldgen/traj_render.py", "--target_path", str(scene_root), "--llm_addr", llm_addr, "--llm_port", str(llm_port), "--llm_name", llm_name],
+        ["torchrun", "--nproc_per_node", str(nproc), "hyworld2/worldgen/video_gen.py", "--target_path", str(scene_root), "--fsdp"],
+        ["torchrun", "--nproc_per_node", str(nproc), "hyworld2/worldgen/gen_gs_data.py", "--root_path", str(scene_root), "--save_normal", "--split_sky"],
+        ["python", "-m", "hyworld2.worldgen.world_gs_trainer", "default", "--data_dir", str(scene_root / "gs_data"), "--result_dir", str(out / "gs_result"), "--max_steps", "2000", "--save_steps", "2000", "--eval_steps", "2000", "--ply_steps", "2000", "--save_ply", "--convert_to_spz", "--disable_video", "--depth_loss", "--normal_loss", "--use_mask_gaussian"],
+    ]
+
+
+@app.function(image=image, timeout=20 * 60, volumes={str(HF_CACHE): cache_volume})
+def plan_worldgen_archive(
+    scene_zip: bytes,
+    llm_addr: str,
+    llm_port: int = 8000,
+    llm_name: str = "Qwen/Qwen3-VL-8B-Instruct",
+    nproc: int = 4,
+) -> bytes:
+    """No-GPU planner: produce preflight + exact five-stage command plan."""
+    work = Path(tempfile.mkdtemp(prefix="hyworld_worldgen_plan_", dir="/tmp"))
+    scene_root = _extract_zip(scene_zip, work / "scene")
+    out = work / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    env = {"LLM_ADDR": llm_addr, "LLM_PORT": str(llm_port), "LLM_NAME": llm_name}
+    preflight = subprocess.run(
+        ["python", "scripts/preflight_worldgen_scene.py", str(scene_root), "--repo-root", str(REMOTE_REPO), "--json"],
+        cwd=str(REMOTE_REPO), text=True, capture_output=True, check=False, env={**os.environ, **env}
+    )
+    (out / "preflight.json").write_text(preflight.stdout or preflight.stderr, encoding="utf-8")
+    commands = _planned_worldgen_commands(scene_root, out, llm_addr, llm_port, llm_name, nproc=nproc)
+    (out / "planned_commands.json").write_text(json.dumps(commands, indent=2), encoding="utf-8")
+    (out / "STATUS.txt").write_text(
+        "No-GPU worldgen plan succeeded. This validates scene upload, repo sync, preflight, and exact 5-stage command planning.\n"
+        "It does not execute GPU/VLM stages.\n",
+        encoding="utf-8",
+    )
+    return _zip_dir(out)
+
+
 @app.function(image=image, gpu="H100:4", timeout=12 * 60 * 60, volumes={str(HF_CACHE): cache_volume})
 def generate_world_archive(
     scene_zip: bytes,
@@ -121,3 +160,128 @@ def generate_world_archive(
     for cmd in commands:
         _run(cmd, cwd=REMOTE_REPO, env=env)
     return _zip_dir(out)
+
+
+@app.function(image=image, timeout=20 * 60, volumes={str(HF_CACHE): cache_volume})
+def probe_worldgen_env() -> dict:
+    """No-GPU dependency probe for the worldgen Modal image."""
+    import importlib.util
+    import sys
+
+    modules = [
+        "torch",
+        "torchvision",
+        "diffusers",
+        "transformers",
+        "accelerate",
+        "open3d",
+        "cv2",
+        "numpy",
+        "PIL",
+        "gsplat",
+        "trimesh",
+        "omegaconf",
+        "openai",
+    ]
+    found = {name: importlib.util.find_spec(name) is not None for name in modules}
+    return {
+        "python": sys.version,
+        "repo_exists": REMOTE_REPO.exists(),
+        "worldgen_exists": (REMOTE_REPO / "hyworld2/worldgen/traj_generate.py").exists(),
+        "modules": found,
+        "missing": [name for name, ok in found.items() if not ok],
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+    }
+
+
+@app.local_entrypoint()
+def probe_env_local(output_path: str = "hyworld_worldgen_env_probe.json"):
+    """Run the no-GPU dependency probe and save JSON locally."""
+    result = probe_worldgen_env.remote()
+    out = Path(output_path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    print(json.dumps(result, indent=2))
+    print(f"Saved env probe: {out}")
+
+
+@app.local_entrypoint()
+def preflight_local(input_path: str, output_path: str = "hyworld_worldgen_preflight_result.json"):
+    """Upload a local scene folder/zip and run the no-GPU Modal preflight."""
+    src = Path(input_path).expanduser().resolve()
+    if not src.exists():
+        raise FileNotFoundError(src)
+    if src.is_dir():
+        payload = _zip_dir(src)
+    else:
+        payload = src.read_bytes()
+    result = preflight_worldgen_archive.remote(payload)
+    out = Path(output_path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    print(json.dumps(result, indent=2))
+    print(f"Saved preflight result: {out}")
+
+
+@app.local_entrypoint()
+def plan_local(
+    input_path: str,
+    output_path: str = "hyworld_worldgen_plan_result.zip",
+    llm_addr: str = "127.0.0.1",
+    llm_port: int = 8000,
+    llm_name: str = "Qwen/Qwen3-VL-8B-Instruct",
+    nproc: int = 4,
+):
+    """Upload a scene and return preflight + exact 5-stage command plan, no GPU."""
+    src = Path(input_path).expanduser().resolve()
+    if not src.exists():
+        raise FileNotFoundError(src)
+    if src.is_dir():
+        payload = _zip_dir(src)
+    else:
+        payload = src.read_bytes()
+    result = plan_worldgen_archive.remote(
+        payload,
+        llm_addr=llm_addr,
+        llm_port=llm_port,
+        llm_name=llm_name,
+        nproc=nproc,
+    )
+    out = Path(output_path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(result)
+    print(f"Saved worldgen plan ZIP: {out}")
+
+
+@app.local_entrypoint()
+def generate_world_local(
+    input_path: str,
+    output_path: str = "hyworld_worldgen_result.zip",
+    llm_addr: str = "127.0.0.1",
+    llm_port: int = 8000,
+    llm_name: str = "Qwen/Qwen3-VL-8B-Instruct",
+    dry_run: bool = True,
+):
+    """Run the full-worldgen Modal scaffold.
+
+    Default `dry_run=True` still allocates the configured Modal function image/GPU
+    if invoked; use `preflight_local` first for no-GPU validation.
+    """
+    src = Path(input_path).expanduser().resolve()
+    if not src.exists():
+        raise FileNotFoundError(src)
+    if src.is_dir():
+        payload = _zip_dir(src)
+    else:
+        payload = src.read_bytes()
+    result = generate_world_archive.remote(
+        payload,
+        llm_addr=llm_addr,
+        llm_port=llm_port,
+        llm_name=llm_name,
+        dry_run=dry_run,
+    )
+    out = Path(output_path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(result)
+    print(f"Saved worldgen result ZIP: {out}")
